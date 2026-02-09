@@ -1,8 +1,12 @@
-# Osaurus XLSX — Agent Skill Guide
+---
+name: osaurus-xlsx
+description: Read, create, and modify Excel (.xlsx) spreadsheets using the Osaurus XLSX plugin. Use when working with .xlsx files, converting between CSV and Excel, or performing batch spreadsheet operations.
+metadata:
+  author: tpae
+  version: "0.1.0"
+---
 
-Use this guide when working with Excel (.xlsx) spreadsheets using the Osaurus XLSX plugin.
-
-## Overview
+# Osaurus XLSX
 
 This plugin reads, creates, and modifies Excel (.xlsx) files. It uses a stateful in-memory model — you load or create a workbook, manipulate it, then save it to disk.
 
@@ -73,6 +77,16 @@ You can override auto-detection with the `type` parameter in `write_cells`:
 - Returns all sheets by default. Use `sheet_name` to read a single sheet.
 - Use `range` (e.g. `"A1:D10"`) to limit the data returned — useful for large files.
 - The returned `workbook_id` is needed for `write_cells`, `modify_xlsx`, `get_cell_value`, and `save_xlsx`.
+- Sheet name matching is case-insensitive.
+
+### get_cell_value
+- Requires a `workbook_id` from a prior `read_xlsx` or `create_xlsx` call.
+- You must provide **either** `cell` (e.g. `"B5"`) **or** `range` (e.g. `"A1:C3"`) — omitting both returns an error.
+- Sheet name matching is case-insensitive.
+
+### list_sheets
+- Reads sheet names directly from disk — no `workbook_id` needed.
+- Useful for discovering sheet names before calling `read_xlsx` with a specific `sheet_name`.
 
 ### create_xlsx
 - Pass an array of sheet definitions, each with a `name`, optional `headers`, and optional `rows`.
@@ -102,6 +116,7 @@ You can override auto-detection with the `type` parameter in `write_cells`:
 
 ### modify_xlsx
 - Batch multiple operations in a single call for efficiency.
+- If `sheet_name` is omitted, operations target the first sheet in the workbook.
 - Available operations:
   - `set_cell` — set a cell value (`ref` + `value`)
   - `set_formula` — set a formula (`ref` + `formula`)
