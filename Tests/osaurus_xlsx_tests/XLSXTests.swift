@@ -896,6 +896,62 @@ struct ToolIntegrationTests {
     #expect(wb.sheet(named: "Summary") != nil)
   }
 
+  @Test("read_xlsx: reads q4_sales_report.xlsx with inline strings and absolute Target paths")
+  func readQ4SalesReport() throws {
+    // This file has:
+    // 1. xmlns:r declared on <sheet> element (not root <workbook>)
+    // 2. Relationship Target with absolute path "/xl/worksheets/sheet1.xml"
+    // 3. All cells use inlineStr (t="inlineStr") or numeric (t="n") types
+    var workbooks: [String: Workbook] = [:]
+    let readTool = ReadXlsxTool()
+
+    // Find the test file relative to the package root
+    let packageRoot = URL(fileURLWithPath: #filePath)
+      .deletingLastPathComponent()  // XLSXTests.swift -> osaurus_xlsx_tests/
+      .deletingLastPathComponent()  // osaurus_xlsx_tests/ -> Tests/
+      .deletingLastPathComponent()  // Tests/ -> package root
+    let xlsxPath = packageRoot.appendingPathComponent("q4_sales_report.xlsx").path
+
+    guard FileManager.default.fileExists(atPath: xlsxPath) else {
+      Issue.record("q4_sales_report.xlsx not found at \(xlsxPath)")
+      return
+    }
+
+    let payload = "{\"path\": \"\(xlsxPath)\"}"
+    let result = readTool.run(args: payload, workbooks: &workbooks)
+    #expect(!result.contains("\"error\""), "read_xlsx returned error: \(result)")
+    #expect(result.contains("\"sheet_count\": 1"))
+    #expect(result.contains("Q4 2025 Report"))
+    #expect(result.contains("Acme Corp"))
+    #expect(result.contains("North America"))
+    #expect(result.contains("1580000"))
+
+    // Verify the workbook was stored
+    let wbId = workbooks.keys.first!
+    let wb = workbooks[wbId]!
+    #expect(wb.sheets.count == 1)
+    #expect(wb.sheets[0].name == "Q4 2025 Report")
+
+    // Verify specific cells
+    let sheet = wb.sheets[0]
+    if case .string(let v) = sheet.getCell("A1")?.value {
+      #expect(v == "Acme Corp - Q4 2025 Sales Report")
+    } else {
+      Issue.record("A1 should be the title string")
+    }
+    if case .number(let v) = sheet.getCell("E5")?.value {
+      #expect(v == 1_580_000)
+    } else {
+      Issue.record("E5 should be 1580000")
+    }
+    // Verify formula cells
+    if case .formula(let f) = sheet.getCell("B9")?.value {
+      #expect(f == "=SUM(B5:B8)")
+    } else {
+      Issue.record("B9 should be formula =SUM(B5:B8)")
+    }
+  }
+
   @Test("Error handling: file not found")
   func errorFileNotFound() {
     var workbooks: [String: Workbook] = [:]

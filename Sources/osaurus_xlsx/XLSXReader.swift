@@ -34,7 +34,15 @@ enum XLSXReader {
 
     for entry in sheetEntries {
       guard let target = relMap[entry.rId] else { continue }
-      let sheetPath = "\(tempDir)/xl/\(target)"
+
+      // Target may be relative (e.g. "worksheets/sheet1.xml") or absolute from package
+      // root (e.g. "/xl/worksheets/sheet1.xml"). Handle both cases.
+      let sheetPath: String
+      if target.hasPrefix("/") {
+        sheetPath = "\(tempDir)\(target)"
+      } else {
+        sheetPath = "\(tempDir)/xl/\(target)"
+      }
       guard FileManager.default.fileExists(atPath: sheetPath) else { continue }
 
       let sheet = try parseWorksheet(at: sheetPath, name: entry.name, sharedStrings: sharedStrings)
