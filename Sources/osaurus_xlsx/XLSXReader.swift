@@ -143,10 +143,17 @@ enum XLSXReader {
       let name = el.attribute(forName: "name")?.stringValue ?? "Sheet"
       let sheetId = Int(el.attribute(forName: "sheetId")?.stringValue ?? "0") ?? 0
 
-      // r:id attribute
+      // r:id attribute — Apple's XMLDocument can be inconsistent with namespace-prefixed
+      // attributes, so we chain multiple lookup strategies as fallbacks.
       let rId =
         el.attribute(forLocalName: "id", uri: OOXML.nsOfficeDocRelationships)?.stringValue
         ?? el.attribute(forName: "r:id")?.stringValue
+        ?? el.attributes?.first(where: {
+          $0.localName == "id" && $0.uri == OOXML.nsOfficeDocRelationships
+        })?.stringValue
+        ?? el.attributes?.first(where: {
+          ($0.name?.hasSuffix(":id") == true) || $0.localName == "id"
+        })?.stringValue
         ?? ""
 
       entries.append(SheetEntry(name: name, rId: rId, sheetId: sheetId))
