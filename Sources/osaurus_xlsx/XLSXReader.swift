@@ -45,7 +45,12 @@ enum XLSXReader {
       }
       guard FileManager.default.fileExists(atPath: sheetPath) else { continue }
 
-      let sheet = try parseWorksheet(at: sheetPath, name: entry.name, sharedStrings: sharedStrings)
+      let sheet = try parseWorksheet(
+        at: sheetPath,
+        name: entry.name,
+        state: entry.state,
+        sharedStrings: sharedStrings
+      )
       workbook.sheets.append(sheet)
     }
 
@@ -128,6 +133,7 @@ enum XLSXReader {
     let name: String
     let rId: String
     let sheetId: Int
+    let state: SheetState
   }
 
   private static func parseWorkbook(tempDir: String) throws -> [SheetEntry] {
@@ -150,6 +156,7 @@ enum XLSXReader {
 
       let name = el.attribute(forName: "name")?.stringValue ?? "Sheet"
       let sheetId = Int(el.attribute(forName: "sheetId")?.stringValue ?? "0") ?? 0
+      let state = SheetState(rawOOXMLValue: el.attribute(forName: "state")?.stringValue)
 
       // r:id attribute — Apple's XMLDocument can be inconsistent with namespace-prefixed
       // attributes, so we chain multiple lookup strategies as fallbacks.
@@ -164,7 +171,7 @@ enum XLSXReader {
         })?.stringValue
         ?? ""
 
-      entries.append(SheetEntry(name: name, rId: rId, sheetId: sheetId))
+      entries.append(SheetEntry(name: name, rId: rId, sheetId: sheetId, state: state))
     }
 
     return entries
@@ -202,12 +209,26 @@ enum XLSXReader {
   // MARK: - Worksheet Parsing
 
   private static func parseWorksheet(
-    at path: String, name: String, sharedStrings: [Int: String]
+    at path: String, name: String, state: SheetState, sharedStrings: [Int: String]
   ) throws -> Sheet {
     let data = try Data(contentsOf: URL(fileURLWithPath: path))
     let doc = try XMLDocument(data: data, options: [])
 
     let sheet = Sheet(name: name)
+    sheet.state = state
+
+    if let dimensionNode = try? doc.nodes(forXPath: "//*[local-name()='dimension']").first
+      as? XMLElement
+    {
+      sheet.declaredDimension = dimensionNode.attribute(forName: "ref")?.stringValue
+    }
+
+    if let mergeNodes = try? doc.nodes(forXPath: "//*[local-name()='mergeCell']") {
+      sheet.mergedRanges = mergeNodes.compactMap { node in
+        guard let el = node as? XMLElement else { return nil }
+        return el.attribute(forName: "ref")?.stringValue
+      }
+    }
 
     guard let rowNodes = try? doc.nodes(forXPath: "//*[local-name()='row']") else {
       return sheet
@@ -227,6 +248,7 @@ enum XLSXReader {
         guard let cellEl = cellNode as? XMLElement else { continue }
         let ref = cellEl.attribute(forName: "r")?.stringValue ?? ""
         let cellType = cellEl.attribute(forName: "t")?.stringValue
+        let styleIndex = cellEl.attribute(forName: "s")?.stringValue.flatMap(Int.init)
 
         // Get <v> value
         let vValue: String?
@@ -298,7 +320,7 @@ enum XLSXReader {
 
         guard let parsed = parseCellReference(ref) else { continue }
         let col = columnNumber(from: parsed.column)
-        cells.append(Cell(reference: ref, column: col, value: cellValue))
+        cells.append(Cell(reference: ref, column: col, value: cellValue, styleIndex: styleIndex))
       }
 
       if !cells.isEmpty {
