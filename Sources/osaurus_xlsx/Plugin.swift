@@ -18,13 +18,84 @@ private typealias osr_invoke_t =
     UnsafePointer<CChar>?  // payload
   ) -> UnsafePointer<CChar>?
 
-private struct osr_plugin_api {
-  var free_string: osr_free_string_t?
-  var `init`: osr_init_t?
-  var destroy: osr_destroy_t?
-  var get_manifest: osr_get_manifest_t?
-  var invoke: osr_invoke_t?
+// Host API callbacks injected into v2 plugins.
+private typealias osr_config_get_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_config_set_t = @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> Void
+private typealias osr_config_delete_t = @convention(c) (UnsafePointer<CChar>?) -> Void
+private typealias osr_db_exec_t =
+  @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_db_query_t =
+  @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_log_t = @convention(c) (Int32, UnsafePointer<CChar>?) -> Void
+private typealias osr_dispatch_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_task_status_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_dispatch_cancel_t = @convention(c) (UnsafePointer<CChar>?) -> Void
+private typealias osr_dispatch_clarify_t =
+  @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> Void
+private typealias osr_complete_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_on_chunk_t =
+  @convention(c) (UnsafePointer<CChar>?, UnsafeMutableRawPointer?) -> Void
+private typealias osr_complete_stream_t =
+  @convention(c) (
+    UnsafePointer<CChar>?,
+    osr_on_chunk_t?,
+    UnsafeMutableRawPointer?
+  ) -> UnsafePointer<CChar>?
+private typealias osr_embed_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_list_models_t = @convention(c) () -> UnsafePointer<CChar>?
+private typealias osr_http_request_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_file_read_t = @convention(c) (UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_list_active_tasks_t = @convention(c) () -> UnsafePointer<CChar>?
+private typealias osr_send_draft_t = @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> Void
+private typealias osr_dispatch_interrupt_t =
+  @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> Void
+private typealias osr_dispatch_add_issue_t =
+  @convention(c) (UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+
+private struct osr_host_api {
+  var version: UInt32 = 0
+  var config_get: osr_config_get_t?
+  var config_set: osr_config_set_t?
+  var config_delete: osr_config_delete_t?
+  var db_exec: osr_db_exec_t?
+  var db_query: osr_db_query_t?
+  var log: osr_log_t?
+  var dispatch: osr_dispatch_t?
+  var task_status: osr_task_status_t?
+  var dispatch_cancel: osr_dispatch_cancel_t?
+  var dispatch_clarify: osr_dispatch_clarify_t?
+  var complete: osr_complete_t?
+  var complete_stream: osr_complete_stream_t?
+  var embed: osr_embed_t?
+  var list_models: osr_list_models_t?
+  var http_request: osr_http_request_t?
+  var file_read: osr_file_read_t?
+  var list_active_tasks: osr_list_active_tasks_t?
+  var send_draft: osr_send_draft_t?
+  var dispatch_interrupt: osr_dispatch_interrupt_t?
+  var dispatch_add_issue: osr_dispatch_add_issue_t?
 }
+
+private typealias osr_handle_route_t =
+  @convention(c) (osr_plugin_ctx_t?, UnsafePointer<CChar>?) -> UnsafePointer<CChar>?
+private typealias osr_on_config_changed_t =
+  @convention(c) (osr_plugin_ctx_t?, UnsafePointer<CChar>?, UnsafePointer<CChar>?) -> Void
+private typealias osr_on_task_event_t =
+  @convention(c) (osr_plugin_ctx_t?, UnsafePointer<CChar>?, Int32, UnsafePointer<CChar>?) -> Void
+
+private struct osr_plugin_api {
+  var free_string: osr_free_string_t? = nil
+  var `init`: osr_init_t? = nil
+  var destroy: osr_destroy_t? = nil
+  var get_manifest: osr_get_manifest_t? = nil
+  var invoke: osr_invoke_t? = nil
+  var version: UInt32 = 0
+  var handle_route: osr_handle_route_t? = nil
+  var on_config_changed: osr_on_config_changed_t? = nil
+  var on_task_event: osr_on_task_event_t? = nil
+}
+
+nonisolated(unsafe) private var hostAPI: UnsafePointer<osr_host_api>?
 
 // MARK: - Plugin Context
 
@@ -303,8 +374,19 @@ nonisolated(unsafe) private var api: osr_plugin_api = {
     return makeCString(result)
   }
 
+  api.version = 2
+  api.handle_route = nil
+  api.on_config_changed = nil
+  api.on_task_event = nil
+
   return api
 }()
+
+@_cdecl("osaurus_plugin_entry_v2")
+public func osaurus_plugin_entry_v2(_ host: UnsafeRawPointer?) -> UnsafeRawPointer? {
+  hostAPI = host?.assumingMemoryBound(to: osr_host_api.self)
+  return UnsafeRawPointer(&api)
+}
 
 @_cdecl("osaurus_plugin_entry")
 public func osaurus_plugin_entry() -> UnsafeRawPointer? {

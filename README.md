@@ -26,6 +26,10 @@ The plugin uses a stateful, in-memory model:
 
 For quick operations, `list_sheets` and `xlsx_to_csv` read directly from disk without loading into memory.
 
+## ABI compatibility
+
+The plugin exports both `osaurus_plugin_entry_v2` and the legacy `osaurus_plugin_entry` entry point. Osaurus hosts that support v2 load the full v2 API table, while older hosts can still fall back to the legacy entry point.
+
 ## Development
 
 ### Build

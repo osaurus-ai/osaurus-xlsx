@@ -3,6 +3,17 @@ import Testing
 
 @testable import osaurus_xlsx
 
+// MARK: - Plugin ABI Tests
+
+@Suite("Plugin ABI")
+struct PluginABITests {
+  @Test("v1 and v2 entry points return API tables")
+  func entryPointsReturnAPIs() {
+    #expect(osaurus_plugin_entry() != nil)
+    #expect(osaurus_plugin_entry_v2(nil) != nil)
+  }
+}
+
 // MARK: - Column Letter/Number Conversion Tests
 
 @Suite("Column Conversion")
