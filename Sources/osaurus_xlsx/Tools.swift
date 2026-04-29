@@ -56,9 +56,15 @@ func sheetToJSON(
     for cell in cells.sorted(by: { $0.column < $1.column }) {
       if cell.column < startCol || cell.column > endCol { continue }
       let valStr = jsonEscape(cell.value.displayString)
-      cellsJSON.append(
-        "{\"ref\": \"\(cell.reference)\", \"type\": \"\(cell.value.typeString)\", \"value\": \"\(valStr)\"}"
-      )
+      var fields = [
+        "\"ref\": \"\(cell.reference)\"",
+        "\"type\": \"\(cell.value.typeString)\"",
+        "\"value\": \"\(valStr)\"",
+      ]
+      if let styleIndex = cell.styleIndex {
+        fields.append("\"style_id\": \(styleIndex)")
+      }
+      cellsJSON.append("{\(fields.joined(separator: ", "))}")
     }
 
     if !cellsJSON.isEmpty {
@@ -67,6 +73,26 @@ func sheetToJSON(
   }
 
   return "[\(rowsJSON.joined(separator: ", "))]"
+}
+
+func sheetSummaryJSON(_ sheet: Sheet) -> String {
+  let mergedRanges = sheet.mergedRanges.map { "\"\(jsonEscape($0))\"" }.joined(separator: ", ")
+  return """
+    {"name": "\(jsonEscape(sheet.name))", "state": "\(sheet.state.rawValue)", "used_range": "\(jsonEscape(sheet.usedRange))", "row_count": \(sheet.maxRow), "column_count": \(sheet.maxColumn), "non_empty_cell_count": \(sheet.nonEmptyCellCount), "formula_count": \(sheet.formulaCount), "merged_ranges": [\(mergedRanges)]}
+    """
+}
+
+func workbookWarnings(_ workbook: Workbook) -> [String] {
+  var warnings: [String] = []
+  if workbook.sourcePath != nil {
+    warnings.append(
+      "Saving a loaded workbook rewrites a minimal XLSX package; styles, charts, comments, and other unsupported workbook parts may not be preserved."
+    )
+  }
+  if workbook.sheets.contains(where: { !$0.mergedRanges.isEmpty }) {
+    warnings.append("Merged ranges are preserved by this plugin, but only cell values are modeled.")
+  }
+  return warnings
 }
 
 // MARK: - Helper: Auto-detect CellValue from string
@@ -145,7 +171,7 @@ struct ReadXlsxTool {
         }
         let rowsJSON = sheetToJSON(sheet, range: parsedRange)
         sheetsJSON.append(
-          "{\"name\": \"\(jsonEscape(sheet.name))\", \"row_count\": \(sheet.maxRow), \"column_count\": \(sheet.maxColumn), \"rows\": \(rowsJSON)}"
+          "{\"name\": \"\(jsonEscape(sheet.name))\", \"state\": \"\(sheet.state.rawValue)\", \"used_range\": \"\(jsonEscape(sheet.usedRange))\", \"row_count\": \(sheet.maxRow), \"column_count\": \(sheet.maxColumn), \"non_empty_cell_count\": \(sheet.nonEmptyCellCount), \"formula_count\": \(sheet.formulaCount), \"merged_ranges\": [\(sheet.mergedRanges.map { "\"\(jsonEscape($0))\"" }.joined(separator: ", "))], \"rows\": \(rowsJSON)}"
         )
       }
 
@@ -259,6 +285,50 @@ struct ListSheetsTool {
       ])
     } catch {
       return jsonError("Failed to read XLSX: \(error)")
+    }
+  }
+}
+
+// MARK: - Tool: xlsx_describe_workbook
+
+struct XlsxDescribeWorkbookTool {
+  let name = "xlsx_describe_workbook"
+
+  struct Args: Decodable {
+    let path: String
+    let _context: FolderContext?
+  }
+
+  func run(args: String, workbooks: inout [String: Workbook]) -> String {
+    guard let data = args.data(using: .utf8),
+      let input = try? JSONDecoder().decode(Args.self, from: data)
+    else {
+      return jsonError("Invalid arguments. Required: path (string)")
+    }
+
+    let pathResult = validatePath(input.path, workingDirectory: input._context?.working_directory)
+    let absolutePath: String
+    switch pathResult {
+    case .success(let p): absolutePath = p
+    case .failure(let msg): return jsonError(msg)
+    }
+
+    guard FileManager.default.fileExists(atPath: absolutePath) else {
+      return jsonError("File not found: \(input.path)")
+    }
+
+    do {
+      let workbook = try XLSXReader.read(from: absolutePath)
+      workbooks[workbook.id] = workbook
+      let sheetsJSON = workbook.sheets.map(sheetSummaryJSON).joined(separator: ", ")
+      return jsonSuccess([
+        "workbook_id": workbook.id,
+        "sheet_count": workbook.sheets.count,
+        "sheets": JSONRaw("[\(sheetsJSON)]"),
+        "warnings": workbookWarnings(workbook),
+      ])
+    } catch {
+      return jsonError("Failed to describe XLSX: \(error)")
     }
   }
 }
@@ -393,9 +463,19 @@ struct SaveXlsxTool {
   let name = "save_xlsx"
 
   struct Args: Decodable {
-    let workbook_id: String
+    let workbookID: String
     let path: String
+    let overwrite: Bool?
+    let dryRun: Bool?
     let _context: FolderContext?
+
+    enum CodingKeys: String, CodingKey {
+      case workbookID = "workbook_id"
+      case path
+      case overwrite
+      case dryRun = "dry_run"
+      case _context
+    }
   }
 
   func run(args: String, workbooks: inout [String: Workbook]) -> String {
@@ -405,8 +485,8 @@ struct SaveXlsxTool {
       return jsonError("Invalid arguments. Required: workbook_id, path")
     }
 
-    guard let workbook = workbooks[input.workbook_id] else {
-      return jsonError("Workbook not found: \(input.workbook_id)")
+    guard let workbook = workbooks[input.workbookID] else {
+      return jsonError("Workbook not found: \(input.workbookID)")
     }
 
     let pathResult = validatePath(input.path, workingDirectory: input._context?.working_directory)
@@ -417,13 +497,27 @@ struct SaveXlsxTool {
     }
 
     let finalPath = absolutePath.hasSuffix(".xlsx") ? absolutePath : "\(absolutePath).xlsx"
+    let exists = FileManager.default.fileExists(atPath: finalPath)
+    let warnings = workbookWarnings(workbook)
+
+    if input.dryRun == true {
+      return jsonSuccess([
+        "dry_run": true,
+        "path": finalPath,
+        "sheet_count": workbook.sheets.count,
+        "would_overwrite": exists,
+        "workbook_id": workbook.id,
+        "warnings": warnings,
+      ])
+    }
 
     do {
-      try XLSXWriter.write(workbook: workbook, to: finalPath)
+      try XLSXWriter.write(workbook: workbook, to: finalPath, overwrite: input.overwrite == true)
       return jsonSuccess([
         "path": finalPath,
         "sheet_count": workbook.sheets.count,
         "workbook_id": workbook.id,
+        "warnings": warnings,
       ])
     } catch {
       return jsonError("Failed to save XLSX: \(error)")

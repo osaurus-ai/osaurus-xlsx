@@ -5,10 +5,16 @@ import Foundation
 enum XLSXWriter {
 
   /// Write a workbook to an .xlsx file at the given path
-  static func write(workbook: Workbook, to outputPath: String) throws {
+  static func write(workbook: Workbook, to outputPath: String, overwrite: Bool = true) throws {
+    if FileManager.default.fileExists(atPath: outputPath), !overwrite {
+      throw XLSXError.fileExists("Refusing to overwrite existing file: \(outputPath)")
+    }
+
     let tempDir = NSTemporaryDirectory() + "osaurus_xlsx_\(UUID().uuidString)"
+    let packagePath = "\(outputPath).tmp-\(UUID().uuidString).xlsx"
     defer {
       try? FileManager.default.removeItem(atPath: tempDir)
+      try? FileManager.default.removeItem(atPath: packagePath)
     }
 
     // Create directory structure
@@ -58,16 +64,17 @@ enum XLSXWriter {
     // Write docProps/core.xml
     try writeFile(generateCorePropsXML(), to: "\(tempDir)/docProps/core.xml")
 
-    // Package as ZIP
-    if FileManager.default.fileExists(atPath: outputPath) {
-      try FileManager.default.removeItem(atPath: outputPath)
-    }
-
+    // Package as ZIP, then atomically move into place.
     let result = try runProcess(
-      "/usr/bin/zip", arguments: ["-r", "-q", outputPath, "."], currentDirectory: tempDir)
+      "/usr/bin/zip", arguments: ["-r", "-q", packagePath, "."], currentDirectory: tempDir)
     if result.exitCode != 0 {
       throw XLSXError.zipFailed(result.output)
     }
+
+    if FileManager.default.fileExists(atPath: outputPath) {
+      try FileManager.default.removeItem(atPath: outputPath)
+    }
+    try FileManager.default.moveItem(atPath: packagePath, toPath: outputPath)
   }
 
   // MARK: - Shared String Table
@@ -142,8 +149,9 @@ enum XLSXWriter {
     var sheetsXML = ""
     for (idx, sheet) in workbook.sheets.enumerated() {
       let sheetNum = idx + 1
+      let stateAttribute = sheet.state.ooxmlValue.map { " state=\"\(xmlEscape($0))\"" } ?? ""
       sheetsXML +=
-        "    <sheet name=\"\(xmlEscape(sheet.name))\" sheetId=\"\(sheetNum)\" r:id=\"rIdSheet\(sheetNum)\"/>\n"
+        "    <sheet name=\"\(xmlEscape(sheet.name))\" sheetId=\"\(sheetNum)\" r:id=\"rIdSheet\(sheetNum)\"\(stateAttribute)/>\n"
     }
 
     return """
@@ -254,13 +262,27 @@ enum XLSXWriter {
       sheetDataXML += rowXML
     }
 
+    let dimensionXML = "  <dimension ref=\"\(xmlEscape(sheet.usedRange))\"/>\n"
+    let mergeCellsXML = generateMergeCellsXML(ranges: sheet.mergedRanges)
+
     return """
       <?xml version="1.0" encoding="UTF-8" standalone="yes"?>
       <worksheet xmlns="\(OOXML.nsSpreadsheetML)">
+      \(dimensionXML)\
         <sheetData>
       \(sheetDataXML)  </sheetData>
+      \(mergeCellsXML)\
       </worksheet>
       """
+  }
+
+  private static func generateMergeCellsXML(ranges: [String]) -> String {
+    let validRanges = ranges.filter { parseRange($0) != nil }
+    guard !validRanges.isEmpty else { return "" }
+
+    let items = validRanges.map { "    <mergeCell ref=\"\(xmlEscape($0))\"/>\n" }.joined()
+
+    return "  <mergeCells count=\"\(validRanges.count)\">\n\(items)  </mergeCells>\n"
   }
 
   // MARK: - Cell XML

@@ -106,6 +106,7 @@ private class PluginContext: @unchecked Sendable {
   let readXlsx = ReadXlsxTool()
   let getCellValue = GetCellValueTool()
   let listSheets = ListSheetsTool()
+  let describeWorkbook = XlsxDescribeWorkbookTool()
   let createXlsx = CreateXlsxTool()
   let writeCells = WriteCellsTool()
   let saveXlsx = SaveXlsxTool()
@@ -196,6 +197,19 @@ nonisolated(unsafe) private var api: osr_plugin_api = {
               "permission_policy": "auto"
             },
             {
+              "id": "xlsx_describe_workbook",
+              "description": "Describe an Excel (.xlsx) workbook without returning all cell data. Returns sheet names, visibility state, used ranges, row and column counts, formula counts, merged ranges, warnings, and a workbook_id for follow-up calls.",
+              "parameters": {
+                "type": "object",
+                "properties": {
+                  "path": {"type": "string", "description": "Path to the .xlsx file (relative to workspace or absolute)"}
+                },
+                "required": ["path"]
+              },
+              "requirements": [],
+              "permission_policy": "auto"
+            },
+            {
               "id": "create_xlsx",
               "description": "Create a new workbook in memory with one or more sheets. Each sheet can have optional headers and rows of data. Values are auto-detected as numbers, booleans, or strings. Use save_xlsx to write the workbook to disk.",
               "parameters": {
@@ -249,12 +263,14 @@ nonisolated(unsafe) private var api: osr_plugin_api = {
             },
             {
               "id": "save_xlsx",
-              "description": "Save a workbook from memory to an .xlsx file on disk. The .xlsx extension is added automatically if missing.",
+              "description": "Save a workbook from memory to an .xlsx file on disk. The .xlsx extension is added automatically if missing. Existing files require overwrite=true; dry_run=true reports the planned write without modifying disk.",
               "parameters": {
                 "type": "object",
                 "properties": {
                   "workbook_id": {"type": "string", "description": "Workbook ID from read_xlsx or create_xlsx"},
-                  "path": {"type": "string", "description": "Output file path (relative to workspace or absolute)"}
+                  "path": {"type": "string", "description": "Output file path (relative to workspace or absolute)"},
+                  "overwrite": {"type": "boolean", "description": "Required to replace an existing file. Defaults to false."},
+                  "dry_run": {"type": "boolean", "description": "If true, validate and report the planned save without writing a file."}
                 },
                 "required": ["workbook_id", "path"]
               },
@@ -355,6 +371,8 @@ nonisolated(unsafe) private var api: osr_plugin_api = {
       result = ctx.getCellValue.run(args: payload, workbooks: &ctx.workbooks)
     case ctx.listSheets.name:
       result = ctx.listSheets.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.describeWorkbook.name:
+      result = ctx.describeWorkbook.run(args: payload, workbooks: &ctx.workbooks)
     case ctx.createXlsx.name:
       result = ctx.createXlsx.run(args: payload, workbooks: &ctx.workbooks)
     case ctx.writeCells.name:

@@ -9,6 +9,7 @@ An [Osaurus](https://osaurus.ai) plugin for reading, creating, and modifying Exc
 | `read_xlsx` | Read an .xlsx file into memory, returning structured cell data |
 | `get_cell_value` | Get the value of a specific cell or range from a loaded workbook |
 | `list_sheets` | List all sheet names in an .xlsx file |
+| `xlsx_describe_workbook` | Return compact workbook metadata without dumping all cells |
 | `create_xlsx` | Create a new workbook in memory with sheets, headers, and data |
 | `write_cells` | Write or update specific cells in a loaded workbook |
 | `save_xlsx` | Save a workbook from memory to an .xlsx file on disk |
@@ -24,7 +25,17 @@ The plugin uses a stateful, in-memory model:
 2. **Modify** the workbook (`write_cells`, `modify_xlsx`)
 3. **Save** to disk (`save_xlsx`)
 
-For quick operations, `list_sheets` and `xlsx_to_csv` read directly from disk without loading into memory.
+For quick operations, `list_sheets`, `xlsx_describe_workbook`, and `xlsx_to_csv` read directly from disk.
+
+`save_xlsx` refuses to replace an existing file unless `overwrite` is explicitly `true`. Use `dry_run` to validate and preview a planned save without writing to disk.
+
+## Fidelity
+
+The plugin currently models workbook sheets, visibility state, used ranges, merged ranges, sparse cells, strings, numbers, booleans, and formulas. It writes minimal XLSX packages and preserves modeled sheet state and merged ranges.
+
+Existing styled workbooks can contain parts that are not modeled yet, including charts, comments, pivot tables, data validation, conditional formatting, macros, and rich formatting. When a loaded workbook is saved, the plugin returns a warning that unsupported workbook parts may not be preserved.
+
+See `docs/fidelity.md` for the current fidelity contract.
 
 ## ABI compatibility
 

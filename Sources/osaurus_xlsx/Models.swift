@@ -25,12 +25,46 @@ final class Workbook: @unchecked Sendable {
   }
 }
 
+// MARK: - Sheet State
+
+enum SheetState: String {
+  case visible
+  case hidden
+  case veryHidden
+  case unknown
+
+  init(rawOOXMLValue: String?) {
+    switch rawOOXMLValue {
+    case nil, "", "visible":
+      self = .visible
+    case "hidden":
+      self = .hidden
+    case "veryHidden":
+      self = .veryHidden
+    default:
+      self = .unknown
+    }
+  }
+
+  var ooxmlValue: String? {
+    switch self {
+    case .hidden, .veryHidden:
+      return rawValue
+    case .visible, .unknown:
+      return nil
+    }
+  }
+}
+
 // MARK: - Sheet
 
 final class Sheet: @unchecked Sendable {
   let id: String
   var name: String
   var rows: [UInt: [Cell]] = [:]  // row number (1-based) -> cells
+  var state: SheetState = .visible
+  var declaredDimension: String?
+  var mergedRanges: [String] = []
 
   init(id: String = UUID().uuidString, name: String) {
     self.id = id
@@ -79,6 +113,45 @@ final class Sheet: @unchecked Sendable {
   /// Get max row number
   var maxRow: UInt {
     rows.keys.max() ?? 0
+  }
+
+  /// Number of non-empty cells retained in the sparse model.
+  var nonEmptyCellCount: Int {
+    rows.values.reduce(0) { $0 + $1.count }
+  }
+
+  /// Number of formula cells retained in the sparse model.
+  var formulaCount: Int {
+    var count = 0
+    for cells in rows.values {
+      for cell in cells {
+        if case .formula = cell.value {
+          count += 1
+        }
+      }
+    }
+    return count
+  }
+
+  /// Compact used range for summaries and tool output.
+  var usedRange: String {
+    var rangeMaxRow = maxRow
+    var rangeMaxColumn = maxColumn
+
+    for range in mergedRanges {
+      guard let parsed = parseRange(range) else { continue }
+      rangeMaxRow = max(rangeMaxRow, parsed.start.row, parsed.end.row)
+      rangeMaxColumn = max(
+        rangeMaxColumn,
+        columnNumber(from: parsed.start.column),
+        columnNumber(from: parsed.end.column)
+      )
+    }
+
+    if rangeMaxRow > 0 && rangeMaxColumn > 0 {
+      return "A1:\(cellReference(column: rangeMaxColumn, row: rangeMaxRow))"
+    }
+    return declaredDimension ?? "A1"
   }
 
   /// Delete a row and shift subsequent rows up
@@ -133,6 +206,7 @@ struct Cell {
   var reference: String  // "A1", "B2"
   var column: UInt  // 1-based column number
   var value: CellValue
+  var styleIndex: Int? = nil
 }
 
 // MARK: - CellValue
@@ -176,6 +250,7 @@ enum XLSXError: Error, CustomStringConvertible {
   case unzipFailed(String)
   case invalidFile(String)
   case parseError(String)
+  case fileExists(String)
 
   var description: String {
     switch self {
@@ -183,6 +258,7 @@ enum XLSXError: Error, CustomStringConvertible {
     case .unzipFailed(let msg): return "Unzip failed: \(msg)"
     case .invalidFile(let msg): return "Invalid XLSX file: \(msg)"
     case .parseError(let msg): return "Parse error: \(msg)"
+    case .fileExists(let msg): return "File exists: \(msg)"
     }
   }
 }

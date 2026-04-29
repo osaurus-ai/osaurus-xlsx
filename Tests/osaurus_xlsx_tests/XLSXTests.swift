@@ -624,6 +624,30 @@ struct RoundTripTests {
       Issue.record("AZ1 should be 'Col52'")
     }
   }
+
+  @Test("Write and read back: workbook metadata")
+  func roundTripWorkbookMetadata() throws {
+    let wb = Workbook()
+    let sheet = wb.addSheet(name: "Metadata")
+    sheet.state = .hidden
+    sheet.mergedRanges = ["A1:C1"]
+    sheet.setCell("A1", value: .string("Title"))
+    sheet.setCell("C2", value: .formula("=SUM(A3:A5)"))
+
+    let tempPath = NSTemporaryDirectory() + "test_metadata_\(UUID().uuidString).xlsx"
+    defer { try? FileManager.default.removeItem(atPath: tempPath) }
+
+    try XLSXWriter.write(workbook: wb, to: tempPath)
+    let loaded = try XLSXReader.read(from: tempPath)
+
+    #expect(loaded.sheets.count == 1)
+    let loadedSheet = loaded.sheets[0]
+    #expect(loadedSheet.state == .hidden)
+    #expect(loadedSheet.usedRange == "A1:C2")
+    #expect(loadedSheet.nonEmptyCellCount == 2)
+    #expect(loadedSheet.formulaCount == 1)
+    #expect(loadedSheet.mergedRanges == ["A1:C1"])
+  }
 }
 
 // MARK: - Tool Integration Tests
@@ -799,6 +823,36 @@ struct ToolIntegrationTests {
     #expect(result.contains("Alpha"))
     #expect(result.contains("Beta"))
     #expect(result.contains("\"count\": 2"))
+  }
+
+  @Test("xlsx_describe_workbook: returns compact workbook metadata")
+  func describeWorkbook() throws {
+    var workbooks: [String: Workbook] = [:]
+    let describeTool = XlsxDescribeWorkbookTool()
+
+    let wb = Workbook()
+    let sheet = wb.addSheet(name: "Planning")
+    sheet.state = .veryHidden
+    sheet.mergedRanges = ["A1:B1"]
+    sheet.setCell("A1", value: .string("Roadmap"))
+    sheet.setCell("B2", value: .formula("=SUM(C1:C4)"))
+
+    let tempPath = NSTemporaryDirectory() + "test_describe_\(UUID().uuidString).xlsx"
+    defer { try? FileManager.default.removeItem(atPath: tempPath) }
+    try XLSXWriter.write(workbook: wb, to: tempPath)
+
+    let payload = "{\"path\": \"\(tempPath)\"}"
+    let result = describeTool.run(args: payload, workbooks: &workbooks)
+
+    #expect(!result.contains("\"error\""))
+    #expect(result.contains("\"sheet_count\": 1"))
+    #expect(result.contains("\"name\": \"Planning\""))
+    #expect(result.contains("\"state\": \"veryHidden\""))
+    #expect(result.contains("\"used_range\": \"A1:B2\""))
+    #expect(result.contains("\"formula_count\": 1"))
+    #expect(result.contains("\"merged_ranges\": [\"A1:B1\"]"))
+    #expect(result.contains("workbook_id"))
+    #expect(workbooks.count == 1)
   }
 
   @Test("get_cell_value: retrieves specific cell")
@@ -1080,5 +1134,63 @@ struct ToolIntegrationTests {
     #expect(!csvResult.contains("\"error\""))
     #expect(csvResult.contains("Widget"))
     #expect(csvResult.contains("9.99"))
+  }
+
+  @Test("save_xlsx: refuses overwrite unless explicit")
+  func saveRequiresExplicitOverwrite() throws {
+    var workbooks: [String: Workbook] = [:]
+
+    let wb = Workbook()
+    let sheet = wb.addSheet(name: "Data")
+    sheet.setCell("A1", value: .string("New"))
+    workbooks[wb.id] = wb
+
+    let existing = Workbook()
+    existing.addSheet(name: "Existing").setCell("A1", value: .string("Old"))
+
+    let tempPath = NSTemporaryDirectory() + "test_overwrite_\(UUID().uuidString).xlsx"
+    defer { try? FileManager.default.removeItem(atPath: tempPath) }
+    try XLSXWriter.write(workbook: existing, to: tempPath)
+
+    let saveTool = SaveXlsxTool()
+    let rejected = saveTool.run(
+      args: "{\"workbook_id\": \"\(wb.id)\", \"path\": \"\(tempPath)\"}",
+      workbooks: &workbooks)
+    #expect(rejected.contains("\"error\""))
+    #expect(rejected.contains("overwrite"))
+
+    let accepted = saveTool.run(
+      args: "{\"workbook_id\": \"\(wb.id)\", \"path\": \"\(tempPath)\", \"overwrite\": true}",
+      workbooks: &workbooks)
+    #expect(!accepted.contains("\"error\""))
+
+    let loaded = try XLSXReader.read(from: tempPath)
+    if case .string(let v) = loaded.sheets[0].getCell("A1")?.value {
+      #expect(v == "New")
+    } else {
+      Issue.record("A1 should contain overwritten value")
+    }
+  }
+
+  @Test("save_xlsx: dry run reports planned write without creating file")
+  func saveDryRun() {
+    var workbooks: [String: Workbook] = [:]
+
+    let wb = Workbook()
+    wb.addSheet(name: "Draft").setCell("A1", value: .string("Preview"))
+    workbooks[wb.id] = wb
+
+    let tempPath = NSTemporaryDirectory() + "test_dry_run_\(UUID().uuidString).xlsx"
+    defer { try? FileManager.default.removeItem(atPath: tempPath) }
+
+    let saveTool = SaveXlsxTool()
+    let result = saveTool.run(
+      args: "{\"workbook_id\": \"\(wb.id)\", \"path\": \"\(tempPath)\", \"dry_run\": true}",
+      workbooks: &workbooks)
+
+    #expect(!result.contains("\"error\""))
+    #expect(result.contains("\"dry_run\": true"))
+    #expect(result.contains("\"would_overwrite\": false"))
+    #expect(!FileManager.default.fileExists(atPath: tempPath))
   }
 }
