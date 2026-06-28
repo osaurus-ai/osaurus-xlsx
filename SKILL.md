@@ -1,12 +1,12 @@
 ---
 name: osaurus-xlsx
-description: Read, create, and modify Excel (.xlsx) spreadsheets using the Osaurus XLSX plugin. Use when working with .xlsx files, converting between CSV and Excel, or performing batch spreadsheet operations.
+description: Read, create, and modify Excel (.xlsx) spreadsheets using the XLSX plugin. Use when working with .xlsx files, converting between CSV and Excel, or performing batch spreadsheet operations.
 metadata:
   author: tpae
   version: "0.1.0"
 ---
 
-# Osaurus XLSX
+# XLSX
 
 This plugin reads, creates, and modifies Excel (.xlsx) files. It uses a stateful in-memory model — you load or create a workbook, manipulate it, then save it to disk.
 
