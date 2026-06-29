@@ -1017,28 +1017,32 @@ struct ToolIntegrationTests {
     }
   }
 
-  @Test("Error handling: file not found")
+  @Test("Error handling: file not found returns not_found envelope")
   func errorFileNotFound() {
     var workbooks: [String: Workbook] = [:]
     let tool = ReadXlsxTool()
     let result = tool.run(
       args: "{\"path\": \"/nonexistent/file.xlsx\"}", workbooks: &workbooks)
-    #expect(result.contains("\"error\""))
+    #expect(result.contains("\"ok\":false"))
+    #expect(result.contains("\"kind\":\"not_found\""))
+    #expect(result.contains("\"retryable\":false"))
     #expect(result.contains("not found"))
+    #expect(!result.contains("\"error\""))
   }
 
-  @Test("Error handling: workbook not found")
+  @Test("Error handling: workbook not found returns not_found envelope")
   func errorWorkbookNotFound() {
     var workbooks: [String: Workbook] = [:]
     let tool = GetCellValueTool()
     let result = tool.run(
       args: "{\"workbook_id\": \"fake-id\", \"sheet_name\": \"Sheet1\", \"cell\": \"A1\"}",
       workbooks: &workbooks)
-    #expect(result.contains("\"error\""))
+    #expect(result.contains("\"ok\":false"))
+    #expect(result.contains("\"kind\":\"not_found\""))
     #expect(result.contains("not found"))
   }
 
-  @Test("Error handling: sheet not found")
+  @Test("Error handling: sheet not found returns not_found envelope")
   func errorSheetNotFound() {
     var workbooks: [String: Workbook] = [:]
 
@@ -1051,8 +1055,19 @@ struct ToolIntegrationTests {
       args:
         "{\"workbook_id\": \"\(wb.id)\", \"sheet_name\": \"NonExistent\", \"cell\": \"A1\"}",
       workbooks: &workbooks)
-    #expect(result.contains("\"error\""))
+    #expect(result.contains("\"ok\":false"))
+    #expect(result.contains("\"kind\":\"not_found\""))
     #expect(result.contains("not found"))
+  }
+
+  @Test("Error handling: invalid args returns invalid_args envelope")
+  func errorInvalidArgs() {
+    var workbooks: [String: Workbook] = [:]
+    let tool = ReadXlsxTool()
+    let result = tool.run(args: "{\"not_path\": 123}", workbooks: &workbooks)
+    #expect(result.contains("\"ok\":false"))
+    #expect(result.contains("\"kind\":\"invalid_args\""))
+    #expect(result.contains("\"retryable\":true"))
   }
 
   @Test("Path validation: rejects traversal")
@@ -1156,7 +1171,8 @@ struct ToolIntegrationTests {
     let rejected = saveTool.run(
       args: "{\"workbook_id\": \"\(wb.id)\", \"path\": \"\(tempPath)\"}",
       workbooks: &workbooks)
-    #expect(rejected.contains("\"error\""))
+    #expect(rejected.contains("\"ok\":false"))
+    #expect(rejected.contains("\"kind\":\"execution_error\""))
     #expect(rejected.contains("overwrite"))
 
     let accepted = saveTool.run(
@@ -1192,5 +1208,116 @@ struct ToolIntegrationTests {
     #expect(result.contains("\"dry_run\": true"))
     #expect(result.contains("\"would_overwrite\": false"))
     #expect(!FileManager.default.fileExists(atPath: tempPath))
+  }
+}
+
+// MARK: - Manifest Tests
+
+@Suite("Manifest")
+struct ManifestTests {
+  private func parsedManifest() throws -> [String: Any] {
+    let data = Data(xlsxManifestJSON.utf8)
+    let obj = try JSONSerialization.jsonObject(with: data)
+    guard let dict = obj as? [String: Any] else {
+      throw NSError(domain: "ManifestTests", code: 1)
+    }
+    return dict
+  }
+
+  @Test("Embedded manifest is valid JSON")
+  func manifestIsValidJSON() throws {
+    let manifest = try parsedManifest()
+    #expect(!manifest.isEmpty)
+  }
+
+  @Test("plugin_id is osaurus.xlsx and display name is XLSX")
+  func manifestIdentity() throws {
+    let manifest = try parsedManifest()
+    #expect(manifest["plugin_id"] as? String == "osaurus.xlsx")
+    #expect(manifest["name"] as? String == "XLSX")
+  }
+
+  @Test("Every tool has a non-empty id and description")
+  func toolsHaveIdAndDescription() throws {
+    let manifest = try parsedManifest()
+    let capabilities = manifest["capabilities"] as? [String: Any]
+    let tools = capabilities?["tools"] as? [[String: Any]]
+    let toolList = try #require(tools)
+    #expect(toolList.count == 10)
+
+    for tool in toolList {
+      let id = tool["id"] as? String
+      let description = tool["description"] as? String
+      #expect(id != nil && !(id ?? "").isEmpty, "Tool missing id: \(tool)")
+      #expect(
+        description != nil && !(description ?? "").isEmpty,
+        "Tool \(id ?? "?") missing description")
+    }
+  }
+
+  @Test("Manifest exposes the expected 10 tool ids")
+  func toolIdsMatchExpected() throws {
+    let manifest = try parsedManifest()
+    let capabilities = manifest["capabilities"] as? [String: Any]
+    let tools = capabilities?["tools"] as? [[String: Any]]
+    let ids = Set((tools ?? []).compactMap { $0["id"] as? String })
+    let expected: Set<String> = [
+      "read_xlsx", "get_cell_value", "list_sheets", "xlsx_describe_workbook",
+      "create_xlsx", "write_cells", "save_xlsx", "xlsx_to_csv", "csv_to_xlsx", "modify_xlsx",
+    ]
+    #expect(ids == expected)
+  }
+}
+
+// MARK: - Envelope Tests
+
+@Suite("Envelope")
+struct EnvelopeTests {
+  private func parse(_ json: String) throws -> [String: Any] {
+    let obj = try JSONSerialization.jsonObject(with: Data(json.utf8))
+    guard let dict = obj as? [String: Any] else {
+      throw NSError(domain: "EnvelopeTests", code: 1)
+    }
+    return dict
+  }
+
+  @Test("failure round-trips to canonical JSON")
+  func failureRoundTrip() throws {
+    let json = Envelope.failure(.notFound, "missing")
+    let dict = try parse(json)
+    #expect(dict["ok"] as? Bool == false)
+    #expect(dict["kind"] as? String == "not_found")
+    #expect(dict["message"] as? String == "missing")
+    #expect(dict["retryable"] as? Bool == false)
+  }
+
+  @Test("default retryable matches kind semantics")
+  func defaultRetryable() throws {
+    #expect(try parse(Envelope.failure(.invalidArgs, "x"))["retryable"] as? Bool == true)
+    #expect(try parse(Envelope.failure(.executionError, "x"))["retryable"] as? Bool == true)
+    #expect(try parse(Envelope.failure(.unavailable, "x"))["retryable"] as? Bool == true)
+    #expect(try parse(Envelope.failure(.notFound, "x"))["retryable"] as? Bool == false)
+  }
+
+  @Test("explicit retryable override is honored")
+  func retryableOverride() throws {
+    let dict = try parse(Envelope.failure(.notFound, "x", retryable: true))
+    #expect(dict["retryable"] as? Bool == true)
+  }
+
+  @Test("messages with special characters stay valid JSON")
+  func escapesSpecialCharacters() throws {
+    let raw = "line1\nline2 \"quoted\" \\slash\t tab"
+    let dict = try parse(Envelope.failure(.executionError, raw))
+    #expect(dict["message"] as? String == raw)
+    #expect(dict["ok"] as? Bool == false)
+  }
+
+  @Test("successRaw wraps payload canonically")
+  func successRawWrap() throws {
+    let dict = try parse(Envelope.successRaw("{\"value\":42}"))
+    #expect(dict["ok"] as? Bool == true)
+    let result = dict["result"] as? [String: Any]
+    #expect(result?["value"] as? Int == 42)
   }
 }

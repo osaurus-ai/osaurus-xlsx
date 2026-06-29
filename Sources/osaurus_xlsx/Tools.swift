@@ -144,25 +144,34 @@ struct ReadXlsxTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: path (string)")
+      return Envelope.failure(.invalidArgs, "Invalid arguments. Required: path (string)")
     }
 
     let pathResult = validatePath(input.path, workingDirectory: input._context?.working_directory)
     let absolutePath: String
     switch pathResult {
     case .success(let p): absolutePath = p
-    case .failure(let msg): return jsonError(msg)
+    case .failure(let msg): return Envelope.failure(.invalidArgs, msg)
     }
 
     guard FileManager.default.fileExists(atPath: absolutePath) else {
-      return jsonError("File not found: \(input.path)")
+      return Envelope.failure(.notFound, "File not found: \(input.path)")
     }
 
     do {
       let workbook = try XLSXReader.read(from: absolutePath)
       workbooks[workbook.id] = workbook
 
-      let parsedRange = input.range.flatMap { parseRange($0) }
+      let parsedRange: (start: (column: String, row: UInt), end: (column: String, row: UInt))?
+      if let rangeStr = input.range {
+        guard let parsed = parseRange(rangeStr) else {
+          return Envelope.failure(
+            .invalidArgs, "Invalid range format: \(rangeStr). Expected format: A1:D10")
+        }
+        parsedRange = parsed
+      } else {
+        parsedRange = nil
+      }
 
       var sheetsJSON: [String] = []
       for sheet in workbook.sheets {
@@ -181,7 +190,7 @@ struct ReadXlsxTool {
         "sheets": JSONRaw("[\(sheetsJSON.joined(separator: ", "))]"),
       ])
     } catch {
-      return jsonError("Failed to read XLSX: \(error)")
+      return Envelope.failure(.executionError, "Failed to read XLSX: \(error)")
     }
   }
 }
@@ -203,22 +212,28 @@ struct GetCellValueTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: workbook_id, sheet_name, and cell or range")
+      return Envelope.failure(
+        .invalidArgs, "Invalid arguments. Required: workbook_id, sheet_name, and cell or range")
     }
 
     guard let workbook = workbooks[input.workbook_id] else {
-      return jsonError("Workbook not found: \(input.workbook_id)")
+      return Envelope.failure(.notFound, "Workbook not found: \(input.workbook_id)")
     }
 
     guard let sheet = workbook.sheet(named: input.sheet_name) else {
       let available = workbook.sheets.map { $0.name }.joined(separator: ", ")
-      return jsonError("Sheet not found: \(input.sheet_name). Available: \(available)")
+      return Envelope.failure(
+        .notFound, "Sheet not found: \(input.sheet_name). Available: \(available)")
     }
 
     var cellsJSON: [String] = []
 
     if let cellRef = input.cell {
       // Single cell
+      guard parseCellReference(cellRef) != nil else {
+        return Envelope.failure(
+          .invalidArgs, "Invalid cell reference: \(cellRef). Expected format: B5")
+      }
       if let cell = sheet.getCell(cellRef) {
         cellsJSON.append(
           "{\"ref\": \"\(cell.reference)\", \"type\": \"\(cell.value.typeString)\", \"value\": \"\(jsonEscape(cell.value.displayString))\"}"
@@ -230,7 +245,8 @@ struct GetCellValueTool {
     } else if let rangeStr = input.range {
       // Range of cells
       guard let parsedRange = parseRange(rangeStr) else {
-        return jsonError("Invalid range format: \(rangeStr). Expected format: A1:D10")
+        return Envelope.failure(
+          .invalidArgs, "Invalid range format: \(rangeStr). Expected format: A1:D10")
       }
       let rangeJSON = sheetToJSON(sheet, range: parsedRange)
       return jsonSuccess([
@@ -239,7 +255,8 @@ struct GetCellValueTool {
         "rows": JSONRaw(rangeJSON),
       ])
     } else {
-      return jsonError("Provide either 'cell' (e.g. \"B5\") or 'range' (e.g. \"A1:C3\")")
+      return Envelope.failure(
+        .invalidArgs, "Provide either 'cell' (e.g. \"B5\") or 'range' (e.g. \"A1:C3\")")
     }
 
     return jsonSuccess([
@@ -263,18 +280,18 @@ struct ListSheetsTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: path (string)")
+      return Envelope.failure(.invalidArgs, "Invalid arguments. Required: path (string)")
     }
 
     let pathResult = validatePath(input.path, workingDirectory: input._context?.working_directory)
     let absolutePath: String
     switch pathResult {
     case .success(let p): absolutePath = p
-    case .failure(let msg): return jsonError(msg)
+    case .failure(let msg): return Envelope.failure(.invalidArgs, msg)
     }
 
     guard FileManager.default.fileExists(atPath: absolutePath) else {
-      return jsonError("File not found: \(input.path)")
+      return Envelope.failure(.notFound, "File not found: \(input.path)")
     }
 
     do {
@@ -284,7 +301,7 @@ struct ListSheetsTool {
         "sheets": names,
       ])
     } catch {
-      return jsonError("Failed to read XLSX: \(error)")
+      return Envelope.failure(.executionError, "Failed to read XLSX: \(error)")
     }
   }
 }
@@ -303,18 +320,18 @@ struct XlsxDescribeWorkbookTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: path (string)")
+      return Envelope.failure(.invalidArgs, "Invalid arguments. Required: path (string)")
     }
 
     let pathResult = validatePath(input.path, workingDirectory: input._context?.working_directory)
     let absolutePath: String
     switch pathResult {
     case .success(let p): absolutePath = p
-    case .failure(let msg): return jsonError(msg)
+    case .failure(let msg): return Envelope.failure(.invalidArgs, msg)
     }
 
     guard FileManager.default.fileExists(atPath: absolutePath) else {
-      return jsonError("File not found: \(input.path)")
+      return Envelope.failure(.notFound, "File not found: \(input.path)")
     }
 
     do {
@@ -328,7 +345,7 @@ struct XlsxDescribeWorkbookTool {
         "warnings": workbookWarnings(workbook),
       ])
     } catch {
-      return jsonError("Failed to describe XLSX: \(error)")
+      return Envelope.failure(.executionError, "Failed to describe XLSX: \(error)")
     }
   }
 }
@@ -353,11 +370,12 @@ struct CreateXlsxTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: sheets (array of {name, headers?, rows?})")
+      return Envelope.failure(
+        .invalidArgs, "Invalid arguments. Required: sheets (array of {name, headers?, rows?})")
     }
 
     guard !input.sheets.isEmpty else {
-      return jsonError("Must provide at least one sheet")
+      return Envelope.failure(.invalidArgs, "Must provide at least one sheet")
     }
 
     let workbook = Workbook()
@@ -423,12 +441,13 @@ struct WriteCellsTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError(
+      return Envelope.failure(
+        .invalidArgs,
         "Invalid arguments. Required: workbook_id, sheet_name, cells (array of {ref, value})")
     }
 
     guard let workbook = workbooks[input.workbook_id] else {
-      return jsonError("Workbook not found: \(input.workbook_id)")
+      return Envelope.failure(.notFound, "Workbook not found: \(input.workbook_id)")
     }
 
     // Find or create sheet
@@ -482,18 +501,18 @@ struct SaveXlsxTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: workbook_id, path")
+      return Envelope.failure(.invalidArgs, "Invalid arguments. Required: workbook_id, path")
     }
 
     guard let workbook = workbooks[input.workbookID] else {
-      return jsonError("Workbook not found: \(input.workbookID)")
+      return Envelope.failure(.notFound, "Workbook not found: \(input.workbookID)")
     }
 
     let pathResult = validatePath(input.path, workingDirectory: input._context?.working_directory)
     let absolutePath: String
     switch pathResult {
     case .success(let p): absolutePath = p
-    case .failure(let msg): return jsonError(msg)
+    case .failure(let msg): return Envelope.failure(.invalidArgs, msg)
     }
 
     let finalPath = absolutePath.hasSuffix(".xlsx") ? absolutePath : "\(absolutePath).xlsx"
@@ -520,7 +539,7 @@ struct SaveXlsxTool {
         "warnings": warnings,
       ])
     } catch {
-      return jsonError("Failed to save XLSX: \(error)")
+      return Envelope.failure(.executionError, "Failed to save XLSX: \(error)")
     }
   }
 }
@@ -541,18 +560,18 @@ struct XlsxToCsvTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: path (string)")
+      return Envelope.failure(.invalidArgs, "Invalid arguments. Required: path (string)")
     }
 
     let pathResult = validatePath(input.path, workingDirectory: input._context?.working_directory)
     let absolutePath: String
     switch pathResult {
     case .success(let p): absolutePath = p
-    case .failure(let msg): return jsonError(msg)
+    case .failure(let msg): return Envelope.failure(.invalidArgs, msg)
     }
 
     guard FileManager.default.fileExists(atPath: absolutePath) else {
-      return jsonError("File not found: \(input.path)")
+      return Envelope.failure(.notFound, "File not found: \(input.path)")
     }
 
     do {
@@ -564,12 +583,12 @@ struct XlsxToCsvTool {
       if let name = input.sheet_name {
         guard let s = workbook.sheet(named: name) else {
           let available = workbook.sheets.map { $0.name }.joined(separator: ", ")
-          return jsonError("Sheet not found: \(name). Available: \(available)")
+          return Envelope.failure(.notFound, "Sheet not found: \(name). Available: \(available)")
         }
         sheet = s
       } else {
         guard let s = workbook.sheets.first else {
-          return jsonError("Workbook has no sheets")
+          return Envelope.failure(.notFound, "Workbook has no sheets")
         }
         sheet = s
       }
@@ -615,7 +634,7 @@ struct XlsxToCsvTool {
         "sheet_name": sheet.name,
       ])
     } catch {
-      return jsonError("Failed to read XLSX: \(error)")
+      return Envelope.failure(.executionError, "Failed to read XLSX: \(error)")
     }
   }
 }
@@ -637,7 +656,7 @@ struct CsvToXlsxTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError("Invalid arguments. Required: csv_data (string)")
+      return Envelope.failure(.invalidArgs, "Invalid arguments. Required: csv_data (string)")
     }
 
     let delimiter: Character
@@ -767,12 +786,13 @@ struct ModifyXlsxTool {
     guard let data = args.data(using: .utf8),
       let input = try? JSONDecoder().decode(Args.self, from: data)
     else {
-      return jsonError(
+      return Envelope.failure(
+        .invalidArgs,
         "Invalid arguments. Required: workbook_id, operations (array of operation objects)")
     }
 
     guard let workbook = workbooks[input.workbook_id] else {
-      return jsonError("Workbook not found: \(input.workbook_id)")
+      return Envelope.failure(.notFound, "Workbook not found: \(input.workbook_id)")
     }
 
     // Find target sheet (may be nil for add_sheet operations)
@@ -780,7 +800,8 @@ struct ModifyXlsxTool {
     if let sheetName = input.sheet_name {
       targetSheet = workbook.sheet(named: sheetName)
       if targetSheet == nil {
-        return jsonError(
+        return Envelope.failure(
+          .notFound,
           "Sheet not found: \(sheetName). Available: \(workbook.sheets.map { $0.name }.joined(separator: ", "))"
         )
       }

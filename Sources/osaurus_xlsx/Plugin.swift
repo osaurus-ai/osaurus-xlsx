@@ -140,11 +140,69 @@ nonisolated(unsafe) private var api: osr_plugin_api = {
   }
 
   api.get_manifest = { ctxPtr in
-    let manifest = """
-      {
-        "plugin_id": "osaurus.xlsx",
-        "name": "Osaurus XLSX",
-        "version": "0.1.0",
+    return makeCString(xlsxManifestJSON)
+  }
+
+  api.invoke = { ctxPtr, typePtr, idPtr, payloadPtr in
+    guard let ctxPtr = ctxPtr,
+      let typePtr = typePtr,
+      let idPtr = idPtr,
+      let payloadPtr = payloadPtr
+    else { return nil }
+
+    let ctx = Unmanaged<PluginContext>.fromOpaque(ctxPtr).takeUnretainedValue()
+    let type = String(cString: typePtr)
+    let id = String(cString: idPtr)
+    let payload = String(cString: payloadPtr)
+
+    guard type == "tool" else {
+      return makeCString(Envelope.failure(.invalidArgs, "Unknown capability type: \(type)"))
+    }
+
+    let result: String
+    switch id {
+    case ctx.readXlsx.name:
+      result = ctx.readXlsx.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.getCellValue.name:
+      result = ctx.getCellValue.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.listSheets.name:
+      result = ctx.listSheets.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.describeWorkbook.name:
+      result = ctx.describeWorkbook.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.createXlsx.name:
+      result = ctx.createXlsx.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.writeCells.name:
+      result = ctx.writeCells.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.saveXlsx.name:
+      result = ctx.saveXlsx.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.xlsxToCsv.name:
+      result = ctx.xlsxToCsv.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.csvToXlsx.name:
+      result = ctx.csvToXlsx.run(args: payload, workbooks: &ctx.workbooks)
+    case ctx.modifyXlsx.name:
+      result = ctx.modifyXlsx.run(args: payload, workbooks: &ctx.workbooks)
+    default:
+      result = Envelope.failure(.notFound, "Unknown tool: \(id)")
+    }
+
+    return makeCString(result)
+  }
+
+  api.version = 2
+  api.handle_route = nil
+  api.on_config_changed = nil
+  api.on_task_event = nil
+
+  return api
+}()
+
+// MARK: - Embedded Manifest
+
+let xlsxManifestJSON = """
+  {
+    "plugin_id": "osaurus.xlsx",
+    "name": "XLSX",
+    "version": "0.1.0",
         "description": "Read, create, and modify Excel spreadsheet (.xlsx) files. Supports reading cell data, creating workbooks with multiple sheets, writing cells, formulas, CSV/TSV conversion, and batch modifications.",
         "license": "MIT",
         "authors": [],
@@ -343,62 +401,7 @@ nonisolated(unsafe) private var api: osr_plugin_api = {
           ]
         }
       }
-      """
-    return makeCString(manifest)
-  }
-
-  api.invoke = { ctxPtr, typePtr, idPtr, payloadPtr in
-    guard let ctxPtr = ctxPtr,
-      let typePtr = typePtr,
-      let idPtr = idPtr,
-      let payloadPtr = payloadPtr
-    else { return nil }
-
-    let ctx = Unmanaged<PluginContext>.fromOpaque(ctxPtr).takeUnretainedValue()
-    let type = String(cString: typePtr)
-    let id = String(cString: idPtr)
-    let payload = String(cString: payloadPtr)
-
-    guard type == "tool" else {
-      return makeCString(jsonError("Unknown capability type: \(type)"))
-    }
-
-    let result: String
-    switch id {
-    case ctx.readXlsx.name:
-      result = ctx.readXlsx.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.getCellValue.name:
-      result = ctx.getCellValue.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.listSheets.name:
-      result = ctx.listSheets.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.describeWorkbook.name:
-      result = ctx.describeWorkbook.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.createXlsx.name:
-      result = ctx.createXlsx.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.writeCells.name:
-      result = ctx.writeCells.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.saveXlsx.name:
-      result = ctx.saveXlsx.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.xlsxToCsv.name:
-      result = ctx.xlsxToCsv.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.csvToXlsx.name:
-      result = ctx.csvToXlsx.run(args: payload, workbooks: &ctx.workbooks)
-    case ctx.modifyXlsx.name:
-      result = ctx.modifyXlsx.run(args: payload, workbooks: &ctx.workbooks)
-    default:
-      result = jsonError("Unknown tool: \(id)")
-    }
-
-    return makeCString(result)
-  }
-
-  api.version = 2
-  api.handle_route = nil
-  api.on_config_changed = nil
-  api.on_task_event = nil
-
-  return api
-}()
+  """
 
 @_cdecl("osaurus_plugin_entry_v2")
 public func osaurus_plugin_entry_v2(_ host: UnsafeRawPointer?) -> UnsafeRawPointer? {
